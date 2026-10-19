@@ -1,0 +1,46 @@
+
+
+services:
+  backend1:
+    image: clinica-backend:local
+    restart: unless-stopped
+
+  backend2:
+    image: clinica-backend:local
+    restart: unless-stopped
+
+  backend3:
+    image: clinica-backend:local
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8082:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend1
+      - backend2
+      - backend3
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clinica_user
+      POSTGRES_PASSWORD: ${CLINICA_DB_PASSWORD:?Configura la contraseña}
+      POSTGRES_DB: clinica_db
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"  
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinica_user -d clinica_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_data:
