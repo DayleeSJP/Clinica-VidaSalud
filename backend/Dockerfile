@@ -13,6 +13,9 @@ RUN npm ci --omit=dev
 
 # Copiar el servidor
 COPY server.js ./
+COPY mis-citas.js ./
+COPY agenda.js ./
+COPY database.js ./
 
 # Usar usuario sin privilegios
 USER node

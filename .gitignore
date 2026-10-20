@@ -37,3 +37,8 @@ build/
 
 # Sistema operativo
 Thumbs.db
+# Copias del instalador local
+*.antes-agenda.bak
+
+# Respaldo local del instalador de Mis citas
+*.antes-mis-citas.bak

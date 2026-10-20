@@ -1,16 +1,34 @@
 
 
+
 services:
   backend1:
+    build: ./backend
     image: clinica-backend:local
+    environment: &backend_env
+      DB_HOST: db
+      DB_PORT: "5432"
+      CLINICA_DB_PASSWORD: ${CLINICA_DB_PASSWORD:?Configura la contraseña}
+      JWT_SECRET: ${JWT_SECRET:?Configura JWT_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   backend2:
     image: clinica-backend:local
+    environment: *backend_env
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   backend3:
     image: clinica-backend:local
+    environment: *backend_env
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   nginx:
@@ -35,7 +53,7 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5433:5432"  
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U clinica_user -d clinica_db"]
       interval: 5s

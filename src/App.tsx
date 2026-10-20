@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import IniciarSesion from "./pages/IniciarSesion";
 import Registro from "./pages/Registro";
 import ReservarCita from "./pages/ReservarCita";
+import MisCitas from "./pages/MisCitas";
 import { consultarPerfil } from "./services/api";
 import type { Paciente, RespuestaLogin } from "./types/clinica";
 
 type Vista = "login" | "registro";
+type VistaPaciente = "reservar" | "mis-citas";
 
 export default function App() {
   const [vista, setVista] = useState<Vista>("login");
@@ -13,6 +15,8 @@ export default function App() {
   const [paciente, setPaciente] = useState<Paciente | null>(null);
   const [comprobandoSesion, setComprobandoSesion] = useState(Boolean(token));
   const [aviso, setAviso] = useState("");
+  const [vistaPaciente, setVistaPaciente] = useState<VistaPaciente>("reservar");
+  const [citaReciente, setCitaReciente] = useState<number | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -46,6 +50,8 @@ export default function App() {
     setToken(respuesta.token);
     setPaciente(respuesta.paciente);
     setAviso("");
+    setVistaPaciente("reservar");
+    setCitaReciente(null);
   }
 
   function cerrarSesion() {
@@ -54,6 +60,8 @@ export default function App() {
     setPaciente(null);
     setVista("login");
     setAviso("");
+    setVistaPaciente("reservar");
+    setCitaReciente(null);
   }
 
   return (
@@ -68,7 +76,44 @@ export default function App() {
         {comprobandoSesion ? (
           <p className="text-center text-slate-600">Verificando sesión...</p>
         ) : paciente && token ? (
-          <ReservarCita paciente={paciente} token={token} onCerrarSesion={cerrarSesion} />
+          <div className="space-y-5">
+            <nav aria-label="Secciones del paciente" className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+              <button
+                type="button"
+                onClick={() => { setVistaPaciente("reservar"); setCitaReciente(null); }}
+                aria-current={vistaPaciente === "reservar" ? "page" : undefined}
+                className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${vistaPaciente === "reservar" ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-blue-50"}`}
+              >
+                Reservar cita
+              </button>
+              <button
+                type="button"
+                onClick={() => { setVistaPaciente("mis-citas"); setCitaReciente(null); }}
+                aria-current={vistaPaciente === "mis-citas" ? "page" : undefined}
+                className={`rounded-lg px-5 py-2.5 text-sm font-semibold transition-colors ${vistaPaciente === "mis-citas" ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-blue-50"}`}
+              >
+                Mis citas
+              </button>
+            </nav>
+            {vistaPaciente === "reservar" ? (
+              <ReservarCita
+                paciente={paciente}
+                token={token}
+                onCerrarSesion={cerrarSesion}
+                onReservaConfirmada={(idCita) => {
+                  setCitaReciente(idCita);
+                  setVistaPaciente("mis-citas");
+                }}
+              />
+            ) : (
+              <MisCitas
+                paciente={paciente}
+                token={token}
+                onCerrarSesion={cerrarSesion}
+                citaReciente={citaReciente}
+              />
+            )}
+          </div>
         ) : vista === "registro" ? (
           <Registro
             onRegistrado={() => {
