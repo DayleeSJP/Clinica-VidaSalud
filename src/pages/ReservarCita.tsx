@@ -1,73 +1,132 @@
-import { useEffect, useState, type SubmitEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Mensaje from "../components/Mensaje";
+import SelectorHorarios from "../components/SelectorHorarios";
 import {
-  consultarHorarios, consultarMedicos, crearCita, ErrorAPI, mensajeError
+  consultarHorarios,
+  consultarMedicos,
+  crearCita,
+  ErrorAPI,
+  mensajeError
 } from "../services/api";
 import type { Horario, Medico, Paciente } from "../types/clinica";
+import { fechaHorario, fechaLocal, horarioEsFuturo } from "../utils/fechas";
 
 type Props = {
   paciente: Paciente;
   token: string;
   onCerrarSesion: () => void;
+  onReservaConfirmada?: (idCita: number) => void;
 };
 
-const campo = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-blue-500 focus:outline-none disabled:bg-slate-100";
+const campo =
+  "w-full rounded-xl border border-sky-200 bg-white/80 px-4 py-3 text-slate-800 outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-100";
 
-export default function ReservarCita({ paciente, token, onCerrarSesion }: Props) {
+export default function ReservarCita({ paciente, token, onCerrarSesion, onReservaConfirmada }: Props) {
   const [medicos, setMedicos] = useState<Medico[]>([]);
   const [horarios, setHorarios] = useState<Horario[]>([]);
+  const [especialidad, setEspecialidad] = useState("");
   const [medicoId, setMedicoId] = useState("");
-  const [horarioId, setHorarioId] = useState("");
+  const [fecha, setFecha] = useState("");
+  const [horarioId, setHorarioId] = useState<number | null>(null);
   const [mensaje, setMensaje] = useState("");
   const [exito, setExito] = useState(false);
   const [cargando, setCargando] = useState(false);
   const [consultando, setConsultando] = useState(false);
 
-  async function cargarDatos() {
-    setConsultando(true);
+  const cargarDatos = useCallback(async (mostrarCarga = true) => {
+    if (mostrarCarga) setConsultando(true);
     try {
       const [listaMedicos, listaHorarios] = await Promise.all([
-        consultarMedicos(), consultarHorarios()
+        consultarMedicos(),
+        consultarHorarios()
       ]);
       setMedicos(listaMedicos);
       setHorarios(listaHorarios);
+      // Si otra persona ocupó un horario, dejamos de mostrarlo como seleccionado.
+      setHorarioId((anterior) =>
+        anterior !== null && !listaHorarios.some((horario) => horario.id === anterior)
+          ? null
+          : anterior
+      );
     } catch (err) {
-      setExito(false);
-      setMensaje(mensajeError(err));
+      if (mostrarCarga) {
+        setExito(false);
+        setMensaje(mensajeError(err));
+      }
     } finally {
-      setConsultando(false);
+      if (mostrarCarga) setConsultando(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void cargarDatos();
-  }, []);
+    // Actualización periódica: no reemplaza la restricción UNIQUE en PostgreSQL.
+    const intervalo = window.setInterval(() => void cargarDatos(false), 20_000);
+    return () => window.clearInterval(intervalo);
+  }, [cargarDatos]);
 
-  const horariosFiltrados = horarios.filter(
-    (horario) => horario.medico_id === Number(medicoId)
+  const hoy = fechaLocal();
+  const ultimoDia = new Date();
+  ultimoDia.setDate(ultimoDia.getDate() + 29);
+  const fechaMaxima = fechaLocal(ultimoDia);
+
+  const especialidades = useMemo(
+    () => [...new Set(medicos.map((medico) => medico.especialidad))].sort((a, b) => a.localeCompare(b, "es")),
+    [medicos]
   );
 
-  async function reservar(e: SubmitEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!horarioId || cargando) return;
+  const medicosFiltrados = useMemo(
+    () => medicos.filter((medico) => medico.especialidad === especialidad),
+    [medicos, especialidad]
+  );
+
+  const horariosFuturos = horarios.filter((horario) => horarioEsFuturo(horario));
+
+  const horariosDia = horariosFuturos
+    .filter((horario) => horario.medico_id === Number(medicoId) && fechaHorario(horario) === fecha)
+    .sort((a, b) => a.hora.localeCompare(b.hora));
+
+  const mensajeSinHorarios = !especialidad
+    ? "Primero selecciona una especialidad."
+    : !medicoId
+      ? "Selecciona un médico para consultar sus horarios."
+      : !fecha
+        ? "Selecciona una fecha en el calendario."
+        : "No hay horarios disponibles para este médico en la fecha seleccionada. Prueba otro día hábil.";
+
+  async function reservar() {
+    if (horarioId === null || cargando || consultando) return;
+
+    // Evita enviar una selección que ya no corresponde al médico/fecha actual.
+    if (!horariosDia.some((horario) => horario.id === horarioId)) {
+      setExito(false);
+      setMensaje("Ese horario ya no está disponible. Actualiza la lista e intenta de nuevo.");
+      setHorarioId(null);
+      await cargarDatos();
+      return;
+    }
 
     setCargando(true);
     setMensaje("");
     setExito(false);
 
     try {
-      const resultado = await crearCita(token, Number(horarioId));
+      const resultado = await crearCita(token, horarioId);
       setExito(true);
-      setMensaje(`Cita confirmada. Número de reserva: ${resultado.cita.id}`);
-      setHorarioId("");
+      setMensaje(`Cita confirmada correctamente. Número de reserva: ${resultado.cita.id}`);
+      setHorarioId(null);
+      onReservaConfirmada?.(resultado.cita.id);
     } catch (err) {
       if (err instanceof ErrorAPI && err.status === 401) {
         onCerrarSesion();
         return;
       }
-      setMensaje(mensajeError(err));
-      // En el caso HTTP 409, ya no debemos dejar seleccionado el horario ocupado.
-      setHorarioId("");
+      setMensaje(
+        err instanceof ErrorAPI && err.status === 409
+          ? "Ese horario acaba de ser reservado por otro paciente. Elige otro horario."
+          : mensajeError(err)
+      );
+      setHorarioId(null);
     } finally {
       await cargarDatos();
       setCargando(false);
@@ -81,8 +140,11 @@ export default function ReservarCita({ paciente, token, onCerrarSesion }: Props)
           <h2 className="text-xl font-semibold">Bienvenido, {paciente.nombre} {paciente.apellido}</h2>
           <p className="text-sm text-slate-500">Paciente ID: {paciente.id} · {paciente.correo}</p>
         </div>
-        <button type="button" onClick={onCerrarSesion}
-          className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50">
+        <button
+          type="button"
+          onClick={onCerrarSesion}
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+        >
           Cerrar sesión
         </button>
       </section>
@@ -93,52 +155,122 @@ export default function ReservarCita({ paciente, token, onCerrarSesion }: Props)
           <p className="mt-1 text-3xl font-bold text-blue-700">{medicos.length}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Horarios disponibles</p>
-          <p className="mt-1 text-3xl font-bold text-green-700">{horarios.length}</p>
+          <p className="text-sm text-slate-500">Horarios futuros disponibles</p>
+          <p className="mt-1 text-3xl font-bold text-emerald-700">{horariosFuturos.length}</p>
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-semibold">Reservar cita médica</h2>
-          <button type="button" onClick={() => void cargarDatos()} disabled={consultando}
-            className="rounded-lg border border-blue-300 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+      <section className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-sky-50 via-cyan-50 to-teal-50 p-5 shadow-sm sm:p-7">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-sky-900">Elige tu atención</h2>
+            <p className="mt-1 text-sm text-sky-700">
+              Agenda automática: lunes a viernes, de 9:00 a 11:00 a. m. y de 2:00 a 4:00 p. m. (próximos 30 días).
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={consultando || cargando}
+            onClick={() => void cargarDatos()}
+            className="rounded-lg border border-sky-300 bg-white/70 px-3 py-2 text-sm font-medium text-sky-800 hover:bg-white disabled:opacity-50"
+          >
             {consultando ? "Actualizando..." : "Actualizar horarios"}
           </button>
         </div>
-        <p className="mb-5 mt-2 text-sm text-slate-500">
-          Para probar la concurrencia, abre esta página con dos cuentas en navegadores distintos.
-        </p>
-        <form className="space-y-4" onSubmit={reservar}>
+
+        <div className="mt-6 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium" htmlFor="medico">Médico</label>
-            <select id="medico" className={campo} required value={medicoId}
-              onChange={(e) => { setMedicoId(e.target.value); setHorarioId(""); }}>
+            <label htmlFor="especialidad" className="mb-1.5 block text-sm font-semibold text-sky-900">
+              Especialidad
+            </label>
+            <select
+              id="especialidad"
+              className={campo}
+              value={especialidad}
+              onChange={(e) => {
+                setEspecialidad(e.target.value);
+                setMedicoId("");
+                setHorarioId(null);
+                setMensaje("");
+              }}
+            >
+              <option value="">Seleccionar especialidad</option>
+              {especialidades.map((opcion) => (
+                <option key={opcion} value={opcion}>{opcion}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label htmlFor="medico" className="mb-1.5 block text-sm font-semibold text-sky-900">
+              Médico
+            </label>
+            <select
+              id="medico"
+              className={campo}
+              disabled={!especialidad}
+              value={medicoId}
+              onChange={(e) => {
+                setMedicoId(e.target.value);
+                setHorarioId(null);
+                setMensaje("");
+              }}
+            >
               <option value="">Seleccionar médico</option>
-              {medicos.map((medico) => (
+              {medicosFiltrados.map((medico) => (
                 <option key={medico.id} value={medico.id}>
-                  {medico.nombre} {medico.apellido} — {medico.especialidad}
+                  {medico.nombre} {medico.apellido}
                 </option>
               ))}
             </select>
           </div>
+
           <div>
-            <label className="mb-1 block text-sm font-medium" htmlFor="horario">Horario disponible</label>
-            <select id="horario" className={campo} required disabled={!medicoId} value={horarioId}
-              onChange={(e) => setHorarioId(e.target.value)}>
-              <option value="">Seleccionar horario</option>
-              {horariosFiltrados.map((horario) => (
-                <option key={horario.id} value={horario.id}>
-                  {horario.fecha} — {horario.hora}
-                </option>
-              ))}
-            </select>
+            <label htmlFor="fecha" className="mb-1.5 block text-sm font-semibold text-sky-900">
+              Fecha
+            </label>
+            <input
+              id="fecha"
+              type="date"
+              min={hoy}
+              max={fechaMaxima}
+              value={fecha}
+              onChange={(e) => {
+                setFecha(e.target.value);
+                setHorarioId(null);
+                setMensaje("");
+              }}
+              className={campo}
+            />
           </div>
-          <button type="submit" disabled={cargando || !horarioId}
-            className="rounded-lg bg-blue-700 px-5 py-2.5 font-medium text-white hover:bg-blue-800 disabled:opacity-50">
-            {cargando ? "Reservando..." : "Reservar cita"}
-          </button>
-        </form>
+        </div>
+
+        <div className="mt-6">
+          <p className="mb-2 text-sm font-semibold text-sky-900">Horarios disponibles</p>
+          <SelectorHorarios
+            horarios={horariosDia}
+            horarioSeleccionado={horarioId}
+            onSeleccionar={(id) => {
+              setHorarioId(id);
+              setMensaje("");
+            }}
+            deshabilitado={cargando || consultando}
+            mensajeVacio={mensajeSinHorarios}
+          />
+          <p className="mt-2 text-xs text-slate-500">
+            Disponibilidad consultada desde PostgreSQL. Se actualiza automáticamente cada 20 segundos.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void reservar()}
+          disabled={horarioId === null || cargando || consultando}
+          className="mt-6 rounded-xl bg-sky-700 px-6 py-3 font-semibold text-white shadow-sm hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {cargando ? "Reservando..." : "Reservar cita →"}
+        </button>
+
         <Mensaje texto={mensaje} tipo={exito ? "exito" : "error"} />
       </section>
     </div>

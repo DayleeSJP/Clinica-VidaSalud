@@ -3,6 +3,7 @@
 const express = require("express");
 const cors = require("cors");
 const pool = require("./database");
+const { asegurarAgenda } = require("./agenda");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const path = require("path");
@@ -134,7 +135,10 @@ app.post("/api/citas", verificarToken, async (req, res) => {
 
     // Comprobar que el horario existe
     const horario = await cliente.query(
-      "SELECT id FROM horarios WHERE id = $1",
+      `SELECT id,
+              (fecha + hora) > (NOW() AT TIME ZONE 'America/Lima') AS es_futuro,
+              fecha < ((NOW() AT TIME ZONE 'America/Lima')::date + 30) AS dentro_rango
+       FROM horarios WHERE id = $1`,
       [Number(horario_id)]
     );
 
@@ -143,6 +147,13 @@ app.post("/api/citas", verificarToken, async (req, res) => {
 
       return res.status(404).json({
         mensaje: "El horario no existe"
+      });
+    }
+
+    if (!horario.rows[0].es_futuro || !horario.rows[0].dentro_rango) {
+      await cliente.query("ROLLBACK");
+      return res.status(409).json({
+        mensaje: "El horario ya pasó o está fuera de la agenda disponible"
       });
     }
 
@@ -185,32 +196,29 @@ app.post("/api/citas", verificarToken, async (req, res) => {
 
 
 
+// AGENDA AUTOMATICA VIDA SALUD: 30 días, L-V, con franjas fijas.
 app.get("/api/horarios-disponibles", async (req, res) => {
   try {
+    // Todas las instancias pueden ejecutar esto: ON CONFLICT evita duplicados.
+    await asegurarAgenda(pool);
     const resultado = await pool.query(`
-      SELECT
-        h.id,
-        h.medico_id,
-        TO_CHAR(h.fecha, 'YYYY-MM-DD') AS fecha,
-        TO_CHAR(h.hora, 'HH24:MI') AS hora
+      SELECT h.id, h.medico_id,
+             TO_CHAR(h.fecha, 'YYYY-MM-DD') AS fecha,
+             TO_CHAR(h.hora, 'HH24:MI') AS hora
       FROM horarios h
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM citas c
-        WHERE c.horario_id = h.id
-        AND c.estado = 'confirmada'
-      )
+      WHERE h.fecha >= (NOW() AT TIME ZONE 'America/Lima')::date
+        AND h.fecha < ((NOW() AT TIME ZONE 'America/Lima')::date + 30)
+        AND (h.fecha + h.hora) > (NOW() AT TIME ZONE 'America/Lima')
+        AND NOT EXISTS (
+          SELECT 1 FROM citas c
+          WHERE c.horario_id = h.id AND c.estado = 'confirmada'
+        )
       ORDER BY h.fecha, h.hora, h.medico_id
     `);
-
     res.json(resultado.rows);
-
   } catch (error) {
-    console.error("Error al consultar horarios:", error.message);
-
-    res.status(500).json({
-      mensaje: "No se pudieron obtener los horarios"
-    });
+    console.error("Error al generar o consultar la agenda:", error.message);
+    res.status(500).json({ mensaje: "No se pudieron obtener los horarios" });
   }
 });
 
@@ -386,6 +394,9 @@ app.get("/api/perfil", verificarToken, async (req, res) => {
 
 
 // Iniciar servidor
+// MIS CITAS: consulta protegida con JWT e identidad del paciente.
+require("./mis-citas")(app, pool, verificarToken);
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor funcionando en http://localhost:${PORT}`);
 });

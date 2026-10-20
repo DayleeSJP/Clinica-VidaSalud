@@ -9,7 +9,7 @@ import type {
 
 // Durante el desarrollo usamos Express en localhost:8080.
 // Más adelante podremos cambiarlo por NGINX (8082) con VITE_API_URL.
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8080";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8082";
 
 
 export class ErrorAPI extends Error {
