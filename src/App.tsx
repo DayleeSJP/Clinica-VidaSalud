@@ -26,9 +26,6 @@ function NavbarSuperior() {
             <h1 className="text-lg font-bold tracking-tight text-white sm:text-xl">
               Clínica <span className="text-cyan-300">Vida y Salud</span>
             </h1>
-            <p className="hidden text-xs font-medium text-blue-200/90 sm:block">
-              Sistema de gestión de citas médicas
-            </p>
           </div>
         </div>
 
